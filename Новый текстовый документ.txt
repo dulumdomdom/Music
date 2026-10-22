@@ -1,0 +1,246 @@
+# Разбор лабораторной работы №1: Классификация и кластеризация пингвинов
+
+## 1. Что требуется в задании
+
+Нужно повторить весь путь из ноутбука (Iris), но на датасете **penguins**, а именно:
+
+1. **Классификация** породы пингвинов (supervised) — как в примере с GaussianNB.
+2. **Кластеризация** (unsupervised, GMM) — без использования меток.
+3. **Исследование влияния признаков**: обучить классификатор, последовательно увеличивая число признаков от 2 до 6, и посмотреть, как меняется точность (accuracy).
+4. **Построить матрицу несоответствия** (confusion matrix) для лучшей/финальной модели.
+
+---
+
+## 2. Ключевые понятия из теории (кратко, но по делу)
+
+### 2.1 Представление данных в scikit-learn
+
+- **X** — матрица признаков, форма `[n_samples, n_features]` (2D).
+- **y** — целевой вектор, форма `[n_samples]` (1D) — то, что предсказываем.
+- Строка = объект (цветок, пингвин), столбец = признак (длина клюва и т.п.).
+
+### 2.2 Estimator API — единый интерфейс
+
+Любая модель в sklearn следует одному шаблону:
+
+```python
+from sklearn.модель import Класс
+model = Класс(гиперпараметры=...)   # 1-2. выбор класса + гиперпараметры
+model.fit(X_train, y_train)         # 3-4. обучение
+y_pred = model.predict(X_test)      # 5. предсказание
+```
+
+Ключевые правила:
+- Всё, что модель **выучила** при `fit`, хранится в атрибутах с `_` на конце: `model.coef_`, `model.intercept_`.
+- Гиперпараметры задаются **до** обучения (например, `n_components=3`).
+- Для unsupervised методов вместо `predict` часто есть `transform` (или тоже `predict`, как у GMM).
+
+### 2.3 Train/test split
+
+Чтобы честно оценить модель, данные делят:
+
+```python
+from sklearn.model_selection import train_test_split
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.15, random_state=1)
+```
+
+`random_state` фиксирует разбиение — важно для воспроизводимости.
+
+### 2.4 Метрики классификации
+
+- **accuracy_score(y_true, y_pred)** — доля правильных ответов.
+- **confusion_matrix(y_true, y_pred)** — таблица «истинный класс × предсказанный класс». По диагонали — правильные ответы, вне диагонали — ошибки. Показывает, *какие* классы путаются (важнее, чем одно число accuracy).
+- **ConfusionMatrixDisplay** — удобная визуализация матрицы.
+
+### 2.5 Кластеризация (GMM)
+
+**Gaussian Mixture Model** — вероятностная модель: предполагает, что данные — смесь нескольких гауссовых «облаков». Ключевой гиперпараметр — `n_components` (число кластеров). Модель не знает меток, она ищет группы по плотности. Затем мы **сопоставляем** найденные кластеры с настоящими видами (это делается вручную/визуально), чтобы оценить качество.
+
+Важно: кластеры нумеруются произвольно (0,1,2), поэтому в ноутбуке их переименовывают в `setosa_predict` и т.п. — но это лишь для наглядности, «правильность» соответствия проверяется глазами.
+
+---
+
+## 3. Датасет `penguins`
+
+Загружается так же, как iris:
+
+```python
+import seaborn as sns
+penguins = sns.load_dataset('penguins')
+```
+
+Что внутри:
+- **Признаки (числовые):** `bill_length_mm`, `bill_depth_mm`, `flipper_length_mm`, `body_mass_g` — 4 штуки.
+- **Категориальные:** `island`, `sex` — их нужно **закодировать** (one-hot / LabelEncoder), если использовать, иначе sklearn ругнётся.
+- **Целевая переменная:** `species` — три вида: `Adelie`, `Chinstrap`, `Gentoo`.
+- **Проблема:** есть **пропуски** (`NaN`) — их надо удалить (`dropna()`) или заполнить, иначе `fit` упадёт.
+
+> В задании сказано «количество признаков от 2 до 6». Числовых признаков всего 4, поэтому чтобы дойти до 6, нужно подключить категориальные (`island`, `sex`) после кодирования. Либо считать «признаками» включая закодированные столбцы. Это ключевой момент, который нужно продумать.
+
+---
+
+## 4. Пошаговый план решения
+
+### Шаг 0. Подготовка данных
+
+```python
+import seaborn as sns
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sklearn.naive_bayes import GaussianNB
+from sklearn.metrics import accuracy_score, confusion_matrix, ConfusionMatrixDisplay
+from sklearn.mixture import GaussianMixture as GMM
+
+penguins = sns.load_dataset('penguins')
+penguins = penguins.dropna()          # убираем пропуски
+print(penguins.shape)
+print(penguins['species'].value_counts())
+```
+
+Кодируем категориальные признаки, чтобы иметь до 6 числовых столбцов:
+
+```python
+# one-hot для island и sex
+penguins_enc = pd.get_dummies(penguins,
+                              columns=['island', 'sex'],
+                              drop_first=False)  # или True
+```
+
+Теперь числовых столбцов-признаков: 4 исходных + 3 island + 2 sex = 9. Можно брать любые подмножества от 2 до 6.
+
+Целевой вектор:
+
+```python
+y = penguins_enc['species']
+```
+
+### Шаг 1. Классификация (как в примере с Iris)
+
+```python
+X = penguins_enc.drop('species', axis=1)
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=1, stratify=y)
+
+model = GaussianNB()
+model.fit(X_train, y_train)
+y_pred = model.predict(X_test)
+print("Accuracy:", accuracy_score(y_test, y_pred))
+```
+
+`stratify=y` желательно — чтобы в train и test были все три вида пропорционально (особенно важно, т.к. Chinstrap мало).
+
+### Шаг 2. Кластеризация (GMM)
+
+```python
+model_gmm = GMM(n_components=3, covariance_type='full', random_state=1)
+model_gmm.fit(X)                   # можно на всех данных
+y_gmm = model_gmm.predict(X)
+
+penguins_plot = penguins.copy()
+penguins_plot['cluster'] = y_gmm
+sns.pairplot(penguins_plot, hue='cluster', height=1.5)
+plt.show()
+```
+
+Сравните с `hue='species'` — увидите, насколько кластеры совпали с видами. Обычно Adelie и Chinstrap частично смешиваются, Gentoo отделяется хорошо (по массе/длине плавника).
+
+### Шаг 3. Исследование влияния числа признаков (2 → 6)
+
+Идея: фиксируем модель (GaussianNB), фиксируем split, но меняем набор признаков. Лучше фиксировать **порядок добавления** признаков, чтобы результат был интерпретируемым. Например, сначала 2 самых «сильных», потом добавляем по одному.
+
+```python
+feature_sets = [
+    ['bill_length_mm', 'bill_depth_mm'],                          # 2
+    ['bill_length_mm', 'bill_depth_mm', 'flipper_length_mm'],     # 3
+    ['bill_length_mm', 'bill_depth_mm', 'flipper_length_mm', 'body_mass_g'],  # 4
+    ['bill_length_mm', 'bill_depth_mm', 'flipper_length_mm', 'body_mass_g',
+     'island_Biscoe'],                                            # 5
+    ['bill_length_mm', 'bill_depth_mm', 'flipper_length_mm', 'body_mass_g',
+     'island_Biscoe', 'island_Dream'],                            # 6
+]
+
+results = []
+for feats in feature_sets:
+    X_sub = penguins_enc[feats]
+    Xtr, Xte, ytr, yte = train_test_split(
+        X_sub, y, test_size=0.2, random_state=1, stratify=y)
+    m = GaussianNB()
+    m.fit(Xtr, ytr)
+    acc = accuracy_score(yte, m.predict(Xte))
+    results.append((len(feats), feats, acc))
+    print(f"{len(feats)} признаков: accuracy = {acc:.3f}")
+```
+
+> Имена one-hot столбцов (`island_Biscoe` и т.д.) проверьте через `print(penguins_enc.columns)`. Если использовали `drop_first=False`, будут все три острова и оба пола.
+
+Результат постройте графиком:
+
+```python
+import matplotlib.pyplot as plt
+n = [r[0] for r in results]
+a = [r[2] for r in results]
+plt.plot(n, a, marker='o')
+plt.xlabel('Число признаков'); plt.ylabel('Accuracy')
+plt.title('Влияние числа признаков на точность')
+plt.grid(True); plt.show()
+```
+
+**Что ожидать/обсуждать:** обычно уже 2–3 признака дают высокую точность, дальше прирост небольшой (или даже падение из-за «проклятия размерности» / шума). Это и есть вывод о влиянии признаков.
+
+### Шаг 4. Матрица несоответствия
+
+Для финальной (например, лучшей по accuracy) модели:
+
+```python
+cm = confusion_matrix(y_test, y_pred)
+disp = ConfusionMatrixDisplay(confusion_matrix=cm,
+                              display_labels=model.classes_)
+disp.plot(cmap='Blues')
+plt.show()
+```
+
+`model.classes_` — массив меток классов в том порядке, в котором они идут в матрице (для GaussianNB это алфавитный порядок: Adelie, Chinstrap, Gentoo). Обязательно передавайте его, иначе подписи будут перепутаны.
+
+---
+
+## 5. Типичные ошибки и подводные камни
+
+| Проблема | Решение |
+|---|---|
+| `ValueError: Input contains NaN` | `penguins = penguins.dropna()` |
+| `could not convert string to float` | закодировать `island`/`sex` через `pd.get_dummies` |
+| Матрица путаницы с неправильными подписями | передавать `display_labels=model.classes_` |
+| Разные accuracy при повторе | фиксировать `random_state` в split и в GMM |
+| GMM-кластеры не совпадают с видами по номерам | это нормально, номера произвольны; сопоставляйте визуально |
+| Один класс пропал в test | `stratify=y` в `train_test_split` |
+| Дисбаланс классов (Chinstrap ~68 из 333) | смотреть не только accuracy, но и матрицу ошибок |
+
+---
+
+## 6. Как оформить выводы (то, что реально оценивают)
+
+1. **Классификация:** точность ~95–100% достижима на penguins — данные хорошо разделимы.
+2. **Кластеризация:** GMM восстанавливает 2–3 группы; Gentoo отделяется отлично, Adelie/Chinstrap частично смешиваются. Сравните pairplot `hue='species'` и `hue='cluster'`.
+3. **Влияние признаков:** постройте таблицу/график «число признаков → accuracy». Объясните, что после 3–4 признаков прирост насыщается, а лишние коррелированные/шумные признаки могут вредить.
+4. **Confusion matrix:** покажите, какие виды путаются (обычно Adelie ↔ Chinstrap), и свяжите это с их биометрической близостью.
+
+---
+
+## 7. Мини-шпаргалка по API (что где лежит)
+
+```
+sklearn.model_selection.train_test_split  — разбиение
+sklearn.naive_bayes.GaussianNB            — классификатор
+sklearn.mixture.GaussianMixture           — кластеризация (GMM)
+sklearn.metrics.accuracy_score            — точность
+sklearn.metrics.confusion_matrix          — матрица ошибок
+sklearn.metrics.ConfusionMatrixDisplay    — её отрисовка
+model.fit / predict / transform           — универсальные методы
+model.<attr>_                            — выученные параметры
+```
+
+Если нужно — могу расписать готовый цельный скрипт под сдачу или подробнее остановиться на кодировании признаков и интерпретации GMM-кластеров.

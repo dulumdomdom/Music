@@ -1,0 +1,105 @@
+# Сжатый конспект: Классификация и кластеризация в scikit-learn (лабораторная на пингвинах)
+
+## 1. Данные в scikit-learn
+
+- **X** — матрица признаков, форма `[n_samples, n_features]` (2D). Строка = объект, столбец = признак.
+- **y** — целевой вектор, форма `[n_samples]` (1D) — то, что предсказываем.
+- Типы: NumPy-массив, Pandas DataFrame/Series, разреженные матрицы SciPy.
+
+## 2. Estimator API — единый шаблон для всех моделей
+
+```python
+model = Класс(гиперпараметры=...)   # 1-2. выбор класса + настройка
+model.fit(X_train, y_train)         # 3-4. обучение
+y_pred = model.predict(X_test)      # 5. предсказание
+```
+
+Правила:
+- Гиперпараметры задаются **до** обучения (например, `n_components=3`).
+- Выученные параметры — атрибуты с `_` на конце: `model.coef_`, `model.classes_`.
+- Для unsupervised вместо `predict` бывает `transform` (у GMM есть и `predict`).
+
+## 3. Train/test split
+
+```python
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=1, stratify=y)
+```
+
+- `random_state` — воспроизводимость.
+- `stratify=y` — сохранить пропорции классов (важно: Chinstrap мало).
+
+## 4. Метрики
+
+- **accuracy_score** — доля правильных ответов (одно число).
+- **confusion_matrix** — таблица «истина × предсказание»: `C[i,j]` = сколько объектов класса `i` предсказано как `j`. Диагональ — верные. Показывает, *какие* классы путаются.
+- **ConfusionMatrixDisplay** — отрисовка. Обязательно `display_labels=model.classes_`, иначе подписи перепутаются.
+
+## 5. Классификация: GaussianNB
+
+- Наивный байесовский классификатор: предполагает, что признаки внутри класса распределены по Гауссу и независимы.
+- Нет гиперпараметров → хорош как baseline.
+- На Iris/penguins даёт ~95–100% — данные хорошо разделимы.
+
+## 6. Кластеризация: GMM (GaussianMixture)
+
+- Моделирует данные как смесь `n_components` гауссовых «облаков».
+- Обучается без меток (EM-алгоритм).
+- Кластеры нумеруются произвольно → сопоставление с видами делаем визуально (pairplot).
+- Обычно: Gentoo отделяется отлично, Adelie ↔ Chinstrap частично смешиваются.
+
+## 7. Датасет `penguins`
+
+```python
+penguins = sns.load_dataset('penguins')
+penguins = penguins.dropna()   # обязательно! есть NaN
+```
+
+- **Числовые признаки (4):** `bill_length_mm`, `bill_depth_mm`, `flipper_length_mm`, `body_mass_g`.
+- **Категориальные:** `island`, `sex` → кодировать через `pd.get_dummies(...)`.
+- **Цель:** `species` (Adelie, Chinstrap, Gentoo).
+- Чтобы дойти до 6 признаков — подключаем one-hot столбцы острова/пола.
+
+## 8. План лабораторной
+
+**Шаг 1 — Классификация.** X = все признаки, y = species. GaussianNB + train_test_split + accuracy + confusion_matrix.
+
+**Шаг 2 — Кластеризация.** GMM(n_components=3) на X без меток. Сравнить pairplot `hue='cluster'` vs `hue='species'`.
+
+**Шаг 3 — Влияние числа признаков (2→6).** Фиксируем split и модель, меняем набор признаков:
+
+```python
+for feats in [2 признака, 3, 4, 5, 6]:
+    X_sub = df[feats]
+    ... train_test_split ... GaussianNB ... accuracy
+```
+
+Строим график «число признаков → accuracy». Ожидание: после 3–4 признаков прирост насыщается, лишние могут вредить (шум, корреляции).
+
+**Шаг 4 — Confusion matrix.** Для финальной модели:
+```python
+cm = confusion_matrix(y_test, y_pred)
+ConfusionMatrixDisplay(cm, display_labels=model.classes_).plot()
+```
+
+## 9. Типичные ошибки
+
+| Ошибка | Решение |
+|---|---|
+| `Input contains NaN` | `dropna()` |
+| `could not convert string to float` | `pd.get_dummies` для island/sex |
+| Неверные подписи в матрице | `display_labels=model.classes_` |
+| Невоспроизводимость | `random_state` везде |
+| Класс пропал в test | `stratify=y` |
+
+## 10. Что писать в выводах
+
+1. Точность классификации высокая (~95–100%) — виды хорошо разделимы по размерам.
+2. GMM восстанавливает группы: Gentoo чётко, Adelie/Chinstrap смешиваются.
+3. Число признаков: прирост accuracy насыщается после 3–4; далее — плато или падение.
+4. Confusion matrix показывает путаницу Adelie ↔ Chinstrap (биометрически близки).
+
+---
+
+**Шпаргалка API:**
+`train_test_split` · `GaussianNB` · `GaussianMixture` · `accuracy_score` · `confusion_matrix` · `ConfusionMatrixDisplay` · `fit/predict/transform` · атрибуты с `_`
